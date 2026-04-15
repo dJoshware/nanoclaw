@@ -124,6 +124,12 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       .describe(
         'Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.',
       ),
+    reply_to_jid: z
+      .string()
+      .optional()
+      .describe(
+        '(Main group only) When set, the task result is piped back to this JID\'s active container or queued for its next run. Use this when scheduling tasks for sub-agents (Bonnie, Elena) so their results are automatically returned to the scheduling group (e.g. Caroline) instead of staying in the sub-agent\'s channel.',
+      ),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -199,6 +205,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       context_mode: args.context_mode || 'group',
       targetJid,
       createdBy: groupFolder,
+      reply_to_jid: args.reply_to_jid || undefined,
       timestamp: new Date().toISOString(),
     };
 

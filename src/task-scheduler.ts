@@ -1,8 +1,14 @@
 import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
+import path from 'path';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  SCHEDULER_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -73,6 +79,49 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+}
+
+/**
+ * Pipe a task result back to the reply_to_jid group.
+ * Writes an IPC input file so the result arrives in the group's active container
+ * (via its waitForIpcMessage polling loop) or is picked up by the next container run.
+ */
+function pipeResultToReplyTarget(
+  replyToJid: string,
+  taskGroupFolder: string,
+  result: string,
+  deps: SchedulerDependencies,
+): void {
+  const groups = deps.registeredGroups();
+  const replyGroup = groups[replyToJid];
+  if (!replyGroup) {
+    logger.warn(
+      { replyToJid, taskGroupFolder },
+      'reply_to_jid group not found, cannot pipe task result',
+    );
+    return;
+  }
+
+  const inputDir = path.join(DATA_DIR, 'ipc', replyGroup.folder, 'input');
+  try {
+    fs.mkdirSync(inputDir, { recursive: true });
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.json`;
+    const filepath = path.join(inputDir, filename);
+    const tempPath = `${filepath}.tmp`;
+    const label = taskGroupFolder.replace(/^slack_/, '');
+    const text = `[Task result from ${label}]\n\n${result}`;
+    fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
+    fs.renameSync(tempPath, filepath);
+    logger.info(
+      { replyToJid, folder: replyGroup.folder, taskGroupFolder },
+      'Piped task result to reply_to_jid group',
+    );
+  } catch (err) {
+    logger.error(
+      { replyToJid, taskGroupFolder, err },
+      'Failed to pipe task result to reply_to_jid',
+    );
+  }
 }
 
 async function runTask(
@@ -187,8 +236,19 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          if (task.reply_to_jid) {
+            // Pipe result back to the scheduling group instead of the task's own channel.
+            // This lets orchestrators (e.g. Caroline) receive sub-agent results automatically.
+            pipeResultToReplyTarget(
+              task.reply_to_jid,
+              task.group_folder,
+              streamedOutput.result,
+              deps,
+            );
+          } else {
+            // Default: forward result to the task's own channel
+            await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
@@ -205,8 +265,10 @@ async function runTask(
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
-    } else if (output.result) {
+    } else if (output.result && !task.reply_to_jid) {
       // Result was already forwarded to the user via the streaming callback above
+      result = output.result;
+    } else if (output.result && task.reply_to_jid) {
       result = output.result;
     }
 

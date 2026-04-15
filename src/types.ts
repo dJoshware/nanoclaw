@@ -71,6 +71,7 @@ export interface ScheduledTask {
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
   created_at: string;
+  reply_to_jid?: string | null; // When set, task result is piped back to this group's container
 }
 
 export interface TaskRunLog {
