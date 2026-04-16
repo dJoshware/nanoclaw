@@ -53,11 +53,47 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source: { type: 'base64'; media_type: string; data: string };
+    };
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
+}
+
+/**
+ * Parse <image> tags out of a prompt string and build a content block array.
+ * Returns a plain string when no images are found (avoids unnecessary allocation).
+ */
+function parseContent(text: string): string | ContentBlock[] {
+  const imageTagRe =
+    /<image filename="[^"]*" mime_type="([^"]*)" data="([^"]*)" \/>/g;
+  const blocks: ContentBlock[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = imageTagRe.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index);
+    if (before) blocks.push({ type: 'text', text: before });
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: match[1], data: match[2] },
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (blocks.length === 0) return text;
+
+  const after = text.slice(lastIndex);
+  if (after) blocks.push({ type: 'text', text: after });
+
+  return blocks;
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -76,7 +112,7 @@ class MessageStream {
   push(text: string): void {
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content: parseContent(text) },
       parent_tool_use_id: null,
       session_id: '',
     });

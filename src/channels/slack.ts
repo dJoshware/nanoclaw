@@ -8,10 +8,19 @@ import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
+  ImageAttachment,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
 } from '../types.js';
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const SUPPORTED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
 
 // Slack's chat.postMessage API limits text to ~4000 characters per call.
 // Messages exceeding this are split into sequential chunks.
@@ -32,6 +41,7 @@ export class SlackChannel implements Channel {
   name = 'slack';
 
   private app: App;
+  private botToken: string;
   private botUserId: string | undefined;
   private connected = false;
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
@@ -55,6 +65,8 @@ export class SlackChannel implements Channel {
       );
     }
 
+    this.botToken = botToken;
+
     this.app = new App({
       token: botToken,
       appToken,
@@ -71,13 +83,24 @@ export class SlackChannel implements Channel {
     this.app.event('message', async ({ event }) => {
       // Bolt's event type is the full MessageEvent union (17+ subtypes).
       // We filter on subtype first, then narrow to the two types we handle.
+      // Also allow 'file_share' so image-only messages aren't silently dropped.
       const subtype = (event as { subtype?: string }).subtype;
-      if (subtype && subtype !== 'bot_message') return;
+      if (subtype && subtype !== 'bot_message' && subtype !== 'file_share') return;
 
       // After filtering, event is either GenericMessageEvent or BotMessageEvent
       const msg = event as HandledMessageEvent;
 
-      if (!msg.text) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawFiles = (msg as any).files as Array<{
+        id: string;
+        name: string;
+        mimetype: string;
+        size: number;
+        url_private_download: string;
+      }> | undefined;
+      const hasFiles = !!rawFiles?.length;
+
+      if (!msg.text && !hasFiles) return;
 
       // Threaded replies are flattened into the channel conversation.
       // The agent sees them alongside channel-level messages; responses
@@ -109,7 +132,7 @@ export class SlackChannel implements Channel {
       // Translate Slack <@UBOTID> mentions into TRIGGER_PATTERN format.
       // Slack encodes @mentions as <@U12345>, which won't match TRIGGER_PATTERN
       // (e.g., ^@<ASSISTANT_NAME>\b), so we prepend the trigger when the bot is @mentioned.
-      let content = msg.text;
+      let content = msg.text || '';
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
         if (
@@ -118,6 +141,22 @@ export class SlackChannel implements Channel {
         ) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
+      }
+
+      // Download image attachments (bot messages never have files)
+      let attachments: ImageAttachment[] | undefined;
+      if (!isBotMessage && hasFiles) {
+        const downloaded = await Promise.all(
+          rawFiles!
+            .filter(
+              (f) =>
+                SUPPORTED_IMAGE_TYPES.has(f.mimetype) &&
+                f.size <= MAX_IMAGE_BYTES,
+            )
+            .map((f) => this.downloadSlackImage(f.url_private_download, f.name, f.mimetype)),
+        );
+        const valid = downloaded.filter((a): a is ImageAttachment => a !== null);
+        if (valid.length > 0) attachments = valid;
       }
 
       this.opts.onMessage(jid, {
@@ -129,6 +168,7 @@ export class SlackChannel implements Channel {
         timestamp,
         is_from_me: isBotMessage,
         is_bot_message: isBotMessage,
+        attachments,
       });
     });
   }
@@ -258,6 +298,28 @@ export class SlackChannel implements Channel {
     } catch (err) {
       logger.debug({ userId, err }, 'Failed to resolve Slack user name');
       return undefined;
+    }
+  }
+
+  private async downloadSlackImage(
+    url: string,
+    filename: string,
+    mimeType: string,
+  ): Promise<ImageAttachment | null> {
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${this.botToken}` },
+      });
+      if (!res.ok) {
+        logger.warn({ url, status: res.status }, 'Failed to download Slack image');
+        return null;
+      }
+      const buffer = await res.arrayBuffer();
+      const data = Buffer.from(buffer).toString('base64');
+      return { filename, mime_type: mimeType, data };
+    } catch (err) {
+      logger.warn({ url, err }, 'Error downloading Slack image');
+      return null;
     }
   }
 

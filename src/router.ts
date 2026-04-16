@@ -23,7 +23,15 @@ export function formatMessages(
       m.reply_to_message_content && m.reply_to_sender_name
         ? `\n  <quoted_message from="${escapeXml(m.reply_to_sender_name)}">${escapeXml(m.reply_to_message_content)}</quoted_message>`
         : '';
-    return `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${replyAttr}>${replySnippet}${escapeXml(m.content)}</message>`;
+    const imageTags =
+      m.attachments
+        ?.filter((a) => a.mime_type.startsWith('image/'))
+        .map(
+          (a) =>
+            `<image filename="${escapeXml(a.filename)}" mime_type="${a.mime_type}" data="${a.data}" />`,
+        )
+        .join('') ?? '';
+    return `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${replyAttr}>${replySnippet}${imageTags}${escapeXml(m.content)}</message>`;
   });
 
   const header = `<context timezone="${escapeXml(timezone)}" />\n`;
