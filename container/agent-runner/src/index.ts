@@ -53,11 +53,13 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
 type ContentBlock =
   | { type: 'text'; text: string }
   | {
       type: 'image';
-      source: { type: 'base64'; media_type: string; data: string };
+      source: { type: 'base64'; media_type: ImageMediaType; data: string };
     };
 
 interface SDKUserMessage {
@@ -83,7 +85,7 @@ function parseContent(text: string): string | ContentBlock[] {
     if (before) blocks.push({ type: 'text', text: before });
     blocks.push({
       type: 'image',
-      source: { type: 'base64', media_type: match[1], data: match[2] },
+      source: { type: 'base64', media_type: match[1] as ImageMediaType, data: match[2] },
     });
     lastIndex = match.index + match[0].length;
   }

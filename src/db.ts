@@ -382,7 +382,10 @@ export function getNewMessages(
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as Record<string, unknown>[];
+    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as Record<
+    string,
+    unknown
+  >[];
   const messages = rows.map(parseMessageRow);
 
   let newTimestamp = lastTimestamp;
@@ -416,7 +419,10 @@ export function getMessagesSince(
   `;
   const rows = db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as Record<string, unknown>[];
+    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as Record<
+    string,
+    unknown
+  >[];
   return rows.map(parseMessageRow);
 }
 

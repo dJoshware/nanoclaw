@@ -85,19 +85,22 @@ export class SlackChannel implements Channel {
       // We filter on subtype first, then narrow to the two types we handle.
       // Also allow 'file_share' so image-only messages aren't silently dropped.
       const subtype = (event as { subtype?: string }).subtype;
-      if (subtype && subtype !== 'bot_message' && subtype !== 'file_share') return;
+      if (subtype && subtype !== 'bot_message' && subtype !== 'file_share')
+        return;
 
       // After filtering, event is either GenericMessageEvent or BotMessageEvent
       const msg = event as HandledMessageEvent;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawFiles = (msg as any).files as Array<{
-        id: string;
-        name: string;
-        mimetype: string;
-        size: number;
-        url_private_download: string;
-      }> | undefined;
+      const rawFiles = (msg as any).files as
+        | Array<{
+            id: string;
+            name: string;
+            mimetype: string;
+            size: number;
+            url_private_download: string;
+          }>
+        | undefined;
       const hasFiles = !!rawFiles?.length;
 
       if (!msg.text && !hasFiles) return;
@@ -153,9 +156,17 @@ export class SlackChannel implements Channel {
                 SUPPORTED_IMAGE_TYPES.has(f.mimetype) &&
                 f.size <= MAX_IMAGE_BYTES,
             )
-            .map((f) => this.downloadSlackImage(f.url_private_download, f.name, f.mimetype)),
+            .map((f) =>
+              this.downloadSlackImage(
+                f.url_private_download,
+                f.name,
+                f.mimetype,
+              ),
+            ),
         );
-        const valid = downloaded.filter((a): a is ImageAttachment => a !== null);
+        const valid = downloaded.filter(
+          (a): a is ImageAttachment => a !== null,
+        );
         if (valid.length > 0) attachments = valid;
       }
 
@@ -311,7 +322,10 @@ export class SlackChannel implements Channel {
         headers: { Authorization: `Bearer ${this.botToken}` },
       });
       if (!res.ok) {
-        logger.warn({ url, status: res.status }, 'Failed to download Slack image');
+        logger.warn(
+          { url, status: res.status },
+          'Failed to download Slack image',
+        );
         return null;
       }
       const buffer = await res.arrayBuffer();
